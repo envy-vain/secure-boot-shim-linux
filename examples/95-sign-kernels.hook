@@ -1,0 +1,15 @@
+# Method B on Arch-based distros: re-sign kernels after every kernel update.
+# Install: sudo cp scripts/sign-kernels.sh /usr/local/bin/sign-kernels
+#          sudo cp examples/95-sign-kernels.hook /etc/pacman.d/hooks/
+# Runs after mkinitcpio's hook (90-) has copied the new kernel to /boot.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/lib/modules/*/vmlinuz
+
+[Action]
+Description = Signing kernels for Secure Boot (MOK)...
+When = PostTransaction
+Exec = /usr/local/bin/sign-kernels
+Depends = sbsigntools

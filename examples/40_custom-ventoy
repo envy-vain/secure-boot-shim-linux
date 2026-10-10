@@ -1,0 +1,19 @@
+#!/bin/sh
+exec tail -n +3 $0
+# Append the entry below to /etc/grub.d/40_custom, then run:
+#   sudo grub-mkconfig -o /boot/grub/grub.cfg
+# Adds "Ventoy USB" to your GRUB menu - useful when the firmware's F12 /
+# boot-device menu is disabled or password-protected.
+
+menuentry "Ventoy USB (plug in first)" --class usb {
+    insmod part_gpt
+    insmod part_msdos
+    insmod fat
+    insmod chain
+    if search --no-floppy --label --set=root VTOYEFI; then
+        chainloader /EFI/BOOT/BOOTX64.EFI
+    else
+        echo "No Ventoy USB found - plug it in and pick this entry again."
+        sleep 4
+    fi
+}
