@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do
         --sign-cert)    CERT=$2; shift 2 ;;
         --make-default) MAKE_DEFAULT=1; shift ;;
         --dry-run)      DRY=1; shift ;;
-        -h|--help)      sed -n '2,20p' "$0"; exit 0 ;;
+        -h|--help)      sed -n '2,16p' "$0"; exit 0 ;;
         *)              die "unknown option: $1 (see --help)" ;;
     esac
 done
@@ -91,10 +91,9 @@ EOF
 fi
 cat "$WORK/sbat.csv"
 OURS=$(awk -F, '$1=="grub"{print $2}' "$WORK/sbat.csv")
-REVOKED=$(mokutil --list-sbat-revocations 2>/dev/null | awk -F, '$1=="grub"{print $2}')
-if [ -n "$REVOKED" ] && [ "$OURS" -lt "$REVOKED" ]; then
-    die "SBAT grub generation $OURS is lower than the revoked level $REVOKED - shim would reject it"
-fi
+# mokutil is optional (missing or older builds lack --list-sbat-revocations); don't let
+# a non-zero exit abort the script under set -e. Empty REVOKED => skip the check below.
+REVOKED=$(mokutil --list-sbat-revocations 2>/dev/null | awk -F, '$1=="grub"{print $2}') || true
 
 step "3. Build a standalone GRUB with its modules built in"
 # Under shim, GRUB may not load modules from disk, so they all go inside the image.
@@ -127,11 +126,20 @@ if [ -n "$LEVEL" ]; then
     build
 fi
 cat "$WORK/mkimage.log" >&2
+
+# Gate on the generation ACTUALLY embedded in the image we just built (the rebuilt
+# LEVEL if GRUB reported one, else OURS), not the pre-rebuild value.
+FINAL=${LEVEL:-$OURS}
+if [ -n "$REVOKED" ] && [ "$FINAL" -lt "$REVOKED" ]; then
+    die "SBAT grub generation $FINAL is below shim's revoked level $REVOKED - shim would reject this GRUB"
+fi
 ls -la "$WORK/grubx64.efi"
 
 if [ -n "$KEY" ]; then
     step "3b. Sign GRUB with your MOK key (Method B)"
-    sbsign --key "$KEY" --cert "$CERT" --output "$WORK/grubx64.efi" "$WORK/grubx64.efi"
+    # Sign to a temp file then move into place, so a failure never leaves a half-written image.
+    sbsign --key "$KEY" --cert "$CERT" --output "$WORK/grubx64.signed" "$WORK/grubx64.efi"
+    mv -f "$WORK/grubx64.signed" "$WORK/grubx64.efi"
 fi
 
 step "4. Copy shim + MokManager + GRUB to $ESP/EFI/$NAME"
@@ -146,22 +154,23 @@ run install -m644 "$WORK/grubx64.efi"     "$DEST/grubx64.efi"
 
 step "5. Firmware boot entry"
 ORDER=$(efibootmgr | sed -n 's/^BootOrder: //p')
-NUM=$(efibootmgr | sed -n "s/^Boot\([0-9A-F]\{4\}\)\*\? $LABEL[[:space:]].*/\1/p" | head -1)
+NUM=$(efibootmgr | sed -n "s/^Boot\([0-9A-F]\{4\}\)\*\? ${LABEL}[[:space:]].*/\1/p" | head -1)
 if [ -z "$NUM" ]; then
     # -C = create without touching BootOrder
     run efibootmgr -C -d "$DISK" -p "$PART" -L "$LABEL" -l "\\EFI\\$NAME\\shimx64.efi" >/dev/null
-    NUM=$(efibootmgr | sed -n "s/^Boot\([0-9A-F]\{4\}\)\*\? $LABEL[[:space:]].*/\1/p" | head -1)
+    NUM=$(efibootmgr | sed -n "s/^Boot\([0-9A-F]\{4\}\)\*\? ${LABEL}[[:space:]].*/\1/p" | head -1)
 fi
 [ "$DRY" = 1 ] && NUM=${NUM:-XXXX}
+# Existing BootOrder minus this entry, so we never list it twice.
+REST=$(echo "$ORDER" | tr ',' '\n' | grep -vx "$NUM" | paste -sd, || true)
 if [ "$MAKE_DEFAULT" = 1 ]; then
-    REST=$(echo "$ORDER" | tr ',' '\n' | grep -vx "$NUM" | paste -sd,)
     run efibootmgr -o "$NUM${REST:+,$REST}" >/dev/null
     echo "Boot$NUM is now first in BootOrder."
 else
     run efibootmgr -n "$NUM" >/dev/null
     echo "Boot$NUM is armed for the NEXT boot only. If it fails, just reboot again."
-    echo "When it works, make it permanent:  sudo efibootmgr -o $NUM${ORDER:+,$ORDER}"
+    echo "When it works, make it permanent:  sudo efibootmgr -o $NUM${REST:+,$REST}"
 fi
 
 step "Done"
-echo "Secure Boot state: $(mokutil --sb-state 2>/dev/null | tr '\n' ' ')"
+echo "Secure Boot state: $(mokutil --sb-state 2>/dev/null | tr '\n' ' ' || true)"

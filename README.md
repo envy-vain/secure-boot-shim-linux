@@ -1,5 +1,7 @@
 # Boot Arch (or any distro) with Secure Boot left ON
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A guide and scripts for running Linux distros that don't ship a Microsoft-signed bootloader
 (Arch, CachyOS, EndeavourOS, Void, Gentoo, …) on a PC where **Secure Boot can't or shouldn't
 be turned off**. A common example is a laptop with a BIOS supervisor password.
@@ -15,9 +17,23 @@ entries, multiple kernels and dual-boot entries all keep working.
 
 ---
 
+## Contents
+
+- [How it works](#how-it-works)
+- [Requirements](#requirements)
+- [Step 0: booting the installer when Secure Boot is on](#step-0-booting-the-installer-when-secure-boot-is-on)
+- [Method A: turn off shim's validation](#method-a-turn-off-shims-validation)
+- [Method B: sign with your own key (MOK)](#method-b-sign-with-your-own-key-mok)
+- [What `install.sh` does](#what-installsh-does)
+- [Ventoy from the GRUB menu](#ventoy-from-the-grub-menu)
+- [Troubleshooting](#troubleshooting)
+- [Undo](#undo)
+
+---
+
 ## How it works
 
-```
+```text
 UEFI firmware (Secure Boot ON)
   └─ shimx64.efi      signed by Microsoft → firmware trusts it
        └─ grubx64.efi   your distro's GRUB, rebuilt as one file with its modules inside
@@ -55,8 +71,9 @@ You need `shimx64.efi` (shim) and `mmx64.efi` (MokManager) **from the same distr
 - **Another distro on the same disk** (easiest): copy them from its folder on the EFI partition,
   e.g. `/boot/efi/EFI/ubuntu/` (Ubuntu, Mint) or `/boot/efi/EFI/fedora/`.
 - **Arch / Arch-based:** install `shim-signed` from the AUR. The files land in `/usr/share/shim-signed/`.
-- **Any distro:** download Fedora's `shim-x64` RPM or Ubuntu's `shim-signed` .deb from the official
-  mirrors and extract it (`bsdtar -xf <file>`). The `.efi` files are inside.
+- **Any distro:** download Fedora's `shim-x64` RPM or Ubuntu's `shim-signed` `.deb` from the official mirrors:
+    - **RPM:** `bsdtar -xf shim-x64*.rpm` unpacks the payload directly; the `.efi` files land under `./boot/efi/EFI/fedora/`.
+    - **`.deb`:** a `.deb` is an `ar` archive, so one `bsdtar` pass only gives you `data.tar.*`. Use `dpkg-deb -x shim-signed*.deb out/` (or run `bsdtar` a second time on `data.tar.*`), then look under `out/usr/lib/shim/`. Ubuntu names the binary `shimx64.efi.signed` — rename your copy to `shimx64.efi`.
 
 ---
 
@@ -82,7 +99,8 @@ You can run the scripts from the installer's chroot.
 
 ## Method A: turn off shim's validation
 
-1. Queue the change and pick a one-time password (8–16 characters):
+1. Queue the change and pick a password you'll re-type in MokManager at the next boot (keep it short
+   and plain-ASCII — some MokManager builds cap it at 16 characters):
    ```sh
    sudo mokutil --disable-validation
    ```
@@ -148,8 +166,10 @@ Notes:
 2. Builds a standalone `grubx64.efi` with `grub-mkimage`:
    - all common modules are built in (under shim, GRUB can't load modules from disk);
    - a tiny built-in config finds your partition by UUID and loads your normal `grub.cfg`;
-   - an **SBAT** section is added. shim rejects GRUB without one, or with a revoked level. The
-     script uses the level your GRUB reports and stops if it's below the revocation level.
+   - an **SBAT** section is added (shim rejects a GRUB without one). The script takes the grub
+     generation from your distro's `sbat.csv` — or `grub,4` if there isn't one — and, if your GRUB
+     reports a newer built-in level, rebuilds the image at that level. It then refuses to continue if
+     the generation it would embed is below shim's revocation list (`mokutil --list-sbat-revocations`).
 3. Signs it with your MOK key (Method B only).
 4. Copies `shimx64.efi`, `mmx64.efi` and `grubx64.efi` to `EFI/shim-grub/` (an old copy is renamed
    `.bak-<date>`, never deleted).
@@ -185,7 +205,7 @@ Please report results.
 | A message mentioning **SBAT** and `Security Policy Violation` | GRUB's (or shim's) SBAT level has been revoked | Update GRUB and re-run `install.sh` |
 | `bad shim signature` when picking a kernel | Kernel isn't signed (Method B) | `sudo ./scripts/sign-kernels.sh` |
 | `grub rescue>` or an empty GRUB prompt | Built-in config couldn't find `grub.cfg` (e.g. `/boot` moved) | Re-run `install.sh` |
-| A brand-new shim gives a Security Violation, an older one works | Microsoft's 2011 UEFI CA expired in 2026. Newer shims are signed with the 2023 CA, which older firmware may not have yet | Update the firmware / Secure Boot database (fwupd or Windows Update), or use a shim signed with the 2011 CA |
+| A brand-new shim gives a Security Violation, an older one works | Microsoft's 2011 UEFI CA expires 27 June 2026. Newer shims are signed with the 2023 CA, which older firmware may not trust yet | Update the firmware / Secure Boot database (fwupd or Windows Update), or use a shim signed with the 2011 CA |
 
 Your old boot entries are never removed, so one reboot gets you back after a failed test boot.
 

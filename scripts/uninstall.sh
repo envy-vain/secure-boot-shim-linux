@@ -18,7 +18,7 @@ if [ -z "$ESP" ]; then
     done
 fi
 
-for n in $(efibootmgr | sed -n "s/^Boot\([0-9A-F]\{4\}\)\*\? $LABEL[[:space:]].*/\1/p"); do
+for n in $(efibootmgr | sed -n "s/^Boot\([0-9A-F]\{4\}\)\*\? ${LABEL}[[:space:]].*/\1/p"); do
     efibootmgr -b "$n" -B >/dev/null && echo "removed boot entry Boot$n"
 done
 if [ -d "$ESP/EFI/$NAME" ]; then

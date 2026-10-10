@@ -18,7 +18,10 @@ for k in "${kernels[@]}"; do
     if sbverify --cert "$CERT" "$k" >/dev/null 2>&1; then
         echo "already signed: $k"
     else
-        sbsign --key "$KEY" --cert "$CERT" --output "$k" "$k"
+        # Sign to a temp file in the same dir, then atomically replace, so an
+        # interrupted sign can never leave a truncated (unbootable) kernel.
+        sbsign --key "$KEY" --cert "$CERT" --output "$k.sbsign.tmp" "$k"
+        mv -f "$k.sbsign.tmp" "$k"
         echo "signed:         $k"
     fi
 done
